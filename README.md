@@ -3,7 +3,7 @@
 A machine-learning web app that predicts whether a loan applicant will default
 and explains **why**, feature by feature, using SHAP.
 
-**Live app:** _paste your Streamlit Cloud URL here once deployed_
+**Live app:** https://loan-default-ml.streamlit.app
 
 ---
 
