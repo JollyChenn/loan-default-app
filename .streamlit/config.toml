@@ -1,10 +1,16 @@
+# =============================================================
+# Streamlit theme configuration — controls the app's look & feel
+# =============================================================
+# We use a dark "fintech" theme: dark navy background with a
+# teal/emerald accent that suggests trust + money.
+
 [theme]
-base = "light"
-primaryColor = "#1f6f54"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f3f6f4"
-textColor = "#1a1a1a"
-font = "serif"
+base                       = "dark"        # start from the built-in dark theme
+primaryColor               = "#10b981"     # emerald — buttons, sliders, links
+backgroundColor            = "#0b0f1a"     # very dark navy (main background)
+secondaryBackgroundColor   = "#161b2e"     # slightly lighter (sidebar / inputs)
+textColor                  = "#e6edf3"     # soft white (easy on the eyes)
+font                       = "sans serif"  # clean modern look
 
 [browser]
 gatherUsageStats = false

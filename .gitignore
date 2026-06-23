@@ -14,6 +14,5 @@ __pycache__/
 venv/
 .ipynb_checkpoints/
 
-# ---- Generated plots (optional — these are local only) ----
-confusion_matrix.png
-shap_importance.png
+# NOTE: confusion_matrix.png and shap_importance.png ARE committed
+# so they show up in the deployed app's "Model Insights" tab.
