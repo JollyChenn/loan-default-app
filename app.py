@@ -233,9 +233,9 @@ def make_gauge(prob):
                 "bgcolor":      "#161b2e",
                 "borderwidth":  0,
                 "steps": [                               # coloured tier bands
-                    {"range": [0, 40],   "color": "#10b98133"},   # green
-                    {"range": [40, 65],  "color": "#f59e0b33"},   # amber
-                    {"range": [65, 100], "color": "#ef444433"},   # red
+                    {"range": [0, 40],   "color": "rgba(16, 185, 129, 0.25)"},   # green
+                    {"range": [40, 65],  "color": "rgba(245, 158, 11, 0.25)"},   # amber
+                    {"range": [65, 100], "color": "rgba(239, 68, 68, 0.25)"},    # red
                 ],
                 "threshold": {                           # marks the 50 % "neutral" line
                     "line":      {"color": "#e6edf3", "width": 3},
@@ -297,62 +297,65 @@ def recommendation_text(prob, default_on_file, percent_income, loan_grade):
 # =============================================================
 with tab_predict:
 
-    st.subheader("Applicant & Loan Details")
-    col_left, col_right = st.columns(2)
+    # ---- One compact bordered "card" holds the full form ----
+    # Streamlit 1.29+ supports st.container(border=True) for clean card UI.
+    with st.container(border=True):
+        st.markdown("#### 📋  Applicant & Loan Details")
 
-    # ---- LEFT COLUMN — person-level inputs ----
-    with col_left:
-        st.markdown("**👤 About the Applicant**")
-        person_age = st.number_input(
-            "Age (years)", min_value=18, max_value=80, value=35, step=1
-        )
-        person_income = st.number_input(
-            "Annual Income ($)", min_value=5_000, max_value=500_000,
-            value=55_000, step=1_000
-        )
-        person_emp_length = st.number_input(
-            "Employment Length (years)", min_value=0.0, max_value=41.0,
-            value=5.0, step=0.5
-        )
-        person_home_ownership = st.selectbox(
-            "Home Ownership", options=encoder_cats["person_home_ownership"]
-        )
-        cb_person_default_on_file = st.selectbox(
-            "Past Default on File?",
-            options=encoder_cats["cb_person_default_on_file"],
-            format_func=lambda x: "Yes — has defaulted before" if x == "Y" else "No — clean history",
-        )
-        cb_person_cred_hist_length = st.number_input(
-            "Credit History Length (years)", min_value=2, max_value=30, value=8, step=1
-        )
+        # 3 columns = tighter layout (less vertical scrolling than 2 cols)
+        c1, c2, c3 = st.columns(3)
 
-    # ---- RIGHT COLUMN — loan-level inputs ----
-    with col_right:
-        st.markdown("**💰 About the Loan**")
-        loan_amnt = st.number_input(
-            "Loan Amount ($)", min_value=500, max_value=35_000,
-            value=10_000, step=500
-        )
-        loan_int_rate = st.slider(
-            "Interest Rate (%)", min_value=5.0, max_value=35.0,
-            value=12.0, step=0.25
-        )
-        loan_grade = st.selectbox(
-            "Loan Grade  (A = best, G = worst)",
-            options=encoder_cats["loan_grade"]
-        )
-        loan_intent = st.selectbox(
-            "Loan Purpose", options=encoder_cats["loan_intent"]
-        )
-        loan_percent_income = (
-            round(loan_amnt / person_income, 4) if person_income > 0 else 0.0
-        )
-        st.metric(
-            label="Loan as % of Annual Income (auto)",
-            value=f"{loan_percent_income:.1%}"
-        )
+        # --- COLUMN 1 — personal basics ---
+        with c1:
+            person_age = st.number_input(
+                "Age (years)", min_value=18, max_value=80, value=35, step=1
+            )
+            person_income = st.number_input(
+                "Annual Income ($)", min_value=5_000, max_value=500_000,
+                value=55_000, step=1_000
+            )
+            person_emp_length = st.number_input(
+                "Employment (years)", min_value=0.0, max_value=41.0,
+                value=5.0, step=0.5
+            )
+            person_home_ownership = st.selectbox(
+                "Home Ownership", options=encoder_cats["person_home_ownership"]
+            )
 
-    st.divider()
+        # --- COLUMN 2 — credit history ---
+        with c2:
+            cb_person_default_on_file = st.selectbox(
+                "Past Default on File?",
+                options=encoder_cats["cb_person_default_on_file"],
+                format_func=lambda x: "Yes" if x == "Y" else "No",
+            )
+            cb_person_cred_hist_length = st.number_input(
+                "Credit History (years)", min_value=2, max_value=30,
+                value=8, step=1
+            )
+            loan_grade = st.selectbox(
+                "Loan Grade  (A=best · G=worst)",
+                options=encoder_cats["loan_grade"]
+            )
+            loan_intent = st.selectbox(
+                "Loan Purpose", options=encoder_cats["loan_intent"]
+            )
+
+        # --- COLUMN 3 — the loan itself ---
+        with c3:
+            loan_amnt = st.number_input(
+                "Loan Amount ($)", min_value=500, max_value=35_000,
+                value=10_000, step=500
+            )
+            loan_int_rate = st.slider(
+                "Interest Rate (%)", min_value=5.0, max_value=35.0,
+                value=12.0, step=0.25
+            )
+
+    # Calculated behind the scenes — no longer displayed as a metric (less clutter)
+    loan_percent_income = (
+        round(loan_amnt / person_income, 4) if person_income > 0 else 0.0
+    )
 
     # ---- Predict button ----
     predict_clicked = st.button(
@@ -380,69 +383,64 @@ with tab_predict:
         X_enc        = encode_row(raw)
         default_prob = float(model.predict_proba(X_enc)[0][1])
 
-        # ---- Result section ----
-        st.markdown("## 📊 Risk Analysis Report")
+        # ---- Result section (gauge + verdict, side-by-side in a card) ----
+        st.markdown("## 📊  Risk Analysis Report")
 
-        result_left, result_right = st.columns([1.1, 1])
+        with st.container(border=True):
+            result_left, result_right = st.columns([1.1, 1])
 
-        # LEFT: the gauge chart
-        with result_left:
-            st.plotly_chart(make_gauge(default_prob), use_container_width=True)
+            # LEFT: the gauge chart
+            with result_left:
+                st.plotly_chart(make_gauge(default_prob), use_container_width=True)
 
-        # RIGHT: numeric verdict + recommendation
-        with result_right:
-            verdict, notes = recommendation_text(
-                default_prob,
-                cb_person_default_on_file,
-                loan_percent_income,
-                loan_grade,
+            # RIGHT: numeric verdict + recommendation
+            with result_right:
+                verdict, notes = recommendation_text(
+                    default_prob,
+                    cb_person_default_on_file,
+                    loan_percent_income,
+                    loan_grade,
+                )
+                st.markdown(f"### Probability: **{default_prob:.1%}**")
+                st.markdown(verdict)
+                if notes:
+                    st.markdown("**Key risk factors:**")
+                    for n in notes:
+                        st.markdown(f"- {n}")
+
+        # ---- SHAP explanation chart (in its own card) ----
+        with st.container(border=True):
+            st.markdown("#### 🔍  Why this prediction? — SHAP feature impact")
+            st.caption(
+                "**Red bars** push toward default · **Blue bars** push away. "
+                "Longer bars matter more for this specific applicant."
             )
-            st.markdown(f"### Probability: **{default_prob:.1%}**")
-            st.markdown(verdict)
-            if notes:
-                st.markdown("**Key risk factors:**")
-                for n in notes:
-                    st.markdown(f"- {n}")
 
-        st.divider()
+            with st.spinner("Computing SHAP values..."):
+                contributions = get_shap_contributions(X_enc)
+                labels        = [nice_names.get(c, c) for c in feature_cols]
+                order         = np.argsort(np.abs(contributions))
+                sv_sorted     = contributions[order]
+                labels_sorted = np.array(labels)[order]
 
-        # ---- SHAP explanation chart ----
-        st.subheader("Why this prediction? — SHAP feature impact")
-        st.caption(
-            "**Red bars** push toward default · **Blue bars** push away. "
-            "Longer bars matter more for THIS specific applicant."
-        )
+                # Dark-themed matplotlib chart so it matches the rest of the app
+                fig, ax = plt.subplots(figsize=(9, 4.5))
+                fig.patch.set_facecolor("#0b0f1a")
+                ax.set_facecolor("#0b0f1a")
+                bar_colors = ["#ef4444" if v > 0 else "#3b82f6" for v in sv_sorted]
+                ax.barh(labels_sorted, sv_sorted, color=bar_colors)
+                ax.axvline(0, color="#8b96a8", linewidth=0.8, linestyle="--")
+                ax.set_xlabel("SHAP value  (positive = pushes toward default)", color="#e6edf3")
+                for spine in ax.spines.values():
+                    spine.set_color("#1f2742")
+                ax.tick_params(colors="#e6edf3")
+                x_abs = max(abs(sv_sorted.max()), abs(sv_sorted.min())) * 1.3 or 0.1
+                ax.set_xlim(-x_abs, x_abs)
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
 
-        with st.spinner("Computing SHAP values..."):
-            contributions = get_shap_contributions(X_enc)
-            labels        = [nice_names.get(c, c) for c in feature_cols]
-            order         = np.argsort(np.abs(contributions))
-            sv_sorted     = contributions[order]
-            labels_sorted = np.array(labels)[order]
-
-            # Build a matplotlib bar chart on a dark background to match the theme
-            fig, ax = plt.subplots(figsize=(9, 5))
-            fig.patch.set_facecolor("#0b0f1a")
-            ax.set_facecolor("#0b0f1a")
-            bar_colors = ["#ef4444" if v > 0 else "#3b82f6" for v in sv_sorted]
-            ax.barh(labels_sorted, sv_sorted, color=bar_colors)
-            ax.axvline(0, color="#8b96a8", linewidth=0.8, linestyle="--")
-            ax.set_xlabel("SHAP value  (positive = pushes toward default)", color="#e6edf3")
-            ax.set_title("Per-Feature Contribution to This Applicant's Score", color="#e6edf3")
-            # Style the axis labels for dark mode
-            for spine in ax.spines.values():
-                spine.set_color("#1f2742")
-            ax.tick_params(colors="#e6edf3")
-            x_abs = max(abs(sv_sorted.max()), abs(sv_sorted.min())) * 1.3 or 0.1
-            ax.set_xlim(-x_abs, x_abs)
-            plt.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
-
-        # ---- Downloadable report ----
-        st.divider()
-        st.subheader("📥 Download Report")
-
+        # ---- Download button (compact, single row) ----
         # Build a tidy CSV of inputs + prediction + SHAP values
         report = raw.T.reset_index()
         report.columns = ["Field", "Value"]
@@ -455,30 +453,15 @@ with tab_predict:
             "Value": [round(default_prob, 4), risk_label(default_prob)[1]],
         })
         full_report = pd.concat([verdict_df, report, contribs_df], ignore_index=True)
-
-        # to_csv() returns a string; encode it to bytes for the download button
-        csv_bytes = full_report.to_csv(index=False).encode("utf-8")
+        csv_bytes   = full_report.to_csv(index=False).encode("utf-8")
 
         st.download_button(
-            label="⬇️  Download applicant report (CSV)",
+            label="📥  Download full applicant report (CSV)",
             data=csv_bytes,
             file_name="loan_risk_report.csv",
             mime="text/csv",
             use_container_width=True,
         )
-
-        # ---- Snapshot card at the bottom ----
-        st.subheader("Applicant Snapshot")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Loan Amount",   f"${loan_amnt:,}")
-            st.metric("Loan Grade",    loan_grade)
-        with c2:
-            st.metric("Interest Rate", f"{loan_int_rate}%")
-            st.metric("Past Default",  "Yes ⚠️" if cb_person_default_on_file == "Y" else "No ✓")
-        with c3:
-            st.metric("Annual Income", f"${person_income:,}")
-            st.metric("Loan Burden",   f"{loan_percent_income:.1%}")
 
 
 # =============================================================
