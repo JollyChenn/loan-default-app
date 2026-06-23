@@ -1,0 +1,19 @@
+﻿# ---- Raw dataset files: too big for GitHub, download from Kaggle instead ----
+cs-training.csv
+cs-test.csv
+credit_risk_dataset.csv
+
+# ---- NOTE: model.pkl is intentionally NOT ignored ----
+# The deployed Streamlit Cloud app needs model.pkl in the repo to work.
+# We keep it small by capping tree depth in train.py so it commits fine.
+
+# ---- Python junk ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# ---- Generated plots (optional — these are local only) ----
+confusion_matrix.png
+shap_importance.png
