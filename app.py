@@ -172,14 +172,19 @@ st.markdown(
 # LOAD MODEL (cached — only loads once per session)
 # ============================================================
 @st.cache_resource
-def load_artifact():
-    """Load the trained model bundle saved by train.py."""
+def load_artifact(mtime):
+    """
+    Load the trained model bundle saved by train.py.
+    The `mtime` argument is part of the cache key — when train.py rewrites
+    model.pkl, mtime changes and Streamlit auto-reloads the new model.
+    """
     if not os.path.exists("model.pkl"):
         return None
     return joblib.load("model.pkl")
 
 
-artifact = load_artifact()
+_mtime   = os.path.getmtime("model.pkl") if os.path.exists("model.pkl") else 0
+artifact = load_artifact(_mtime)
 
 if artifact is None:
     st.error(
@@ -522,13 +527,20 @@ def make_dsr_gauge(dsr, title="Debt Service Ratio"):
 
 
 def get_shap_contributions(X_enc):
-    """SHAP contributions for the default-class on the first row."""
+    """
+    SHAP contributions for the DEFAULT class (class 1) on the first row.
+    Handles all known SHAP / sklearn binary-classifier output shapes.
+    """
     sv = explainer.shap_values(X_enc.values)
+    # Old SHAP API → list [class0_array, class1_array]
     if isinstance(sv, list):
         return np.asarray(sv[1])[0]
     sv = np.asarray(sv)
+    # Newer API → (samples, features, classes)
     if sv.ndim == 3:
         return sv[0, :, 1]
+    # Two-class squeeze fallback: (samples, features) — values are class-1 contributions
+    # (single-output binary RF — SHAP already returns the positive-class deltas)
     return sv[0]
 
 
@@ -540,13 +552,14 @@ def risk_adjusted_pricing(prob, current_rate, loan_amount):
 
     if prob >= 0.65:
         suggested_rate   = current_rate + 4.0
-        suggested_amount = round(loan_amount * 0.50, -2)
+        # `max(500, ...)` keeps tiny loans from rounding to $0
+        suggested_amount = max(500, round(loan_amount * 0.50, -2))
         conditions.append("Require a co-signer with strong credit")
         conditions.append("Limit term to ≤ 24 months")
         conditions.append("Require proof of stable employment ≥ 2 years")
     elif prob >= 0.40:
         suggested_rate   = current_rate + 2.0
-        suggested_amount = round(loan_amount * 0.75, -2)
+        suggested_amount = max(500, round(loan_amount * 0.75, -2))
         conditions.append("Consider lower loan amount or shorter term")
         conditions.append("Verify recent bank statements (3 months)")
     else:
@@ -791,8 +804,10 @@ with tab_predict:
             st.metric("Max Eligible Amount", f"${max_loan:,.0f}",
                       delta=f"vs requested ${loan_amnt:,.0f}", delta_color="off")
         with k4:
-            st.metric("Approval Authority", auth.split('—')[0].strip(),
-                      delta=auth.split('—')[1].strip(), delta_color="off")
+            # Safely split "L1 — Branch Officer" into level + role; fall back if no dash
+            auth_parts = auth.split('—') + [""]
+            st.metric("Approval Authority", auth_parts[0].strip(),
+                      delta=auth_parts[1].strip() or auth, delta_color="off")
 
         # ============================================================
         # ❹  TWIN GAUGES + UNDERWRITING NOTES
@@ -882,36 +897,38 @@ with tab_predict:
         # ============================================================
         # ❿  SHAP EXPLANATION  (collapsible)
         # ============================================================
+        # Compute SHAP up-front (we need it for the CSV report below either way).
+        # Wrapped in try/except so a SHAP version mismatch can't crash the page.
+        try:
+            contributions = get_shap_contributions(X_enc)
+        except Exception:
+            contributions = np.zeros(len(feature_cols))
+
         with st.expander("🔍  Why this decision? — SHAP feature impact", expanded=False):
             st.caption(
                 "**Red bars** push toward default · **Blue bars** push away. "
                 "Longer bars matter more for this applicant."
             )
-            with st.spinner("Computing SHAP values..."):
-                contributions = get_shap_contributions(X_enc)
-                labels        = [nice_names.get(c, c) for c in feature_cols]
-                order         = np.argsort(np.abs(contributions))
-                sv_sorted     = contributions[order]
-                labels_sorted = np.array(labels)[order]
+            labels        = [nice_names.get(c, c) for c in feature_cols]
+            order         = np.argsort(np.abs(contributions))
+            sv_sorted     = contributions[order]
+            labels_sorted = np.array(labels)[order]
 
-                fig, ax = plt.subplots(figsize=(10, 4.5))
-                fig.patch.set_facecolor("#0b0f1a")
-                ax.set_facecolor("#0b0f1a")
-                bar_colors = ["#ef4444" if v > 0 else "#3b82f6" for v in sv_sorted]
-                ax.barh(labels_sorted, sv_sorted, color=bar_colors)
-                ax.axvline(0, color="#8b96a8", linewidth=0.8, linestyle="--")
-                ax.set_xlabel("SHAP value  (positive = pushes toward default)", color="#e6edf3")
-                for spine in ax.spines.values():
-                    spine.set_color("#1f2742")
-                ax.tick_params(colors="#e6edf3")
-                x_abs = max(abs(sv_sorted.max()), abs(sv_sorted.min())) * 1.3 or 0.1
-                ax.set_xlim(-x_abs, x_abs)
-                plt.tight_layout()
-                st.pyplot(fig)
-                plt.close(fig)
-        # Make `contributions` available if SHAP expander wasn't opened
-        if "contributions" not in dir():
-            contributions = get_shap_contributions(X_enc)
+            fig, ax = plt.subplots(figsize=(10, 4.5))
+            fig.patch.set_facecolor("#0b0f1a")
+            ax.set_facecolor("#0b0f1a")
+            bar_colors = ["#ef4444" if v > 0 else "#3b82f6" for v in sv_sorted]
+            ax.barh(labels_sorted, sv_sorted, color=bar_colors)
+            ax.axvline(0, color="#8b96a8", linewidth=0.8, linestyle="--")
+            ax.set_xlabel("SHAP value  (positive = pushes toward default)", color="#e6edf3")
+            for spine in ax.spines.values():
+                spine.set_color("#1f2742")
+            ax.tick_params(colors="#e6edf3")
+            x_abs = max(abs(sv_sorted.max()), abs(sv_sorted.min())) * 1.3 or 0.1
+            ax.set_xlim(-x_abs, x_abs)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
 
         # ============================================================
         # ⓫  DOWNLOAD REPORT
