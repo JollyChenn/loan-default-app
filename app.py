@@ -1082,7 +1082,7 @@ with tab_predict:
                 "adverse_action_reasons",
             ],
             "Value": [
-                app_id, timestamp, verdict.strip(),
+                app_id, timestamp, verdict.split(maxsplit=1)[-1].strip(),
                 round(default_prob, 4), cs_score, cs_label,
                 round(mp, 2), round(total_interest, 2), round(total_paid, 2),
                 round(dsr, 4), round(dsr_this_loan_only, 4), existing_debts,
@@ -1114,7 +1114,7 @@ with tab_predict:
                 "amount":   loan_amnt,
                 "tier":     risk_label(default_prob)[1],
                 "score":    cs_score,
-                "decision": verdict.strip(),
+                "decision": verdict.split(maxsplit=1)[-1].strip(),
                 "time":     timestamp,
             })
             st.session_state.app_history = st.session_state.app_history[:10]
