@@ -213,6 +213,15 @@ explainer = build_explainer(model)
 
 
 # ============================================================
+# SESSION STATE — keeps a rolling history of scored applications
+# ============================================================
+# st.session_state lives for the user's browser session — perfect for
+# letting an underwriter glance back at the last few applications they reviewed.
+if "app_history" not in st.session_state:
+    st.session_state.app_history = []
+
+
+# ============================================================
 # SIDEBAR — branding + guide + developer profile
 # ============================================================
 with st.sidebar:
@@ -259,6 +268,22 @@ with st.sidebar:
     )
     st.divider()
 
+    # ---- Recent applications history (this browser session) ----
+    if st.session_state.app_history:
+        st.markdown("### 📋 Recent Applications")
+        tier_emoji = {"HIGH RISK": "🔴", "MEDIUM RISK": "🟡", "LOW RISK": "🟢"}
+        for a in st.session_state.app_history[:5]:
+            emoji = tier_emoji.get(a["tier"], "•")
+            st.markdown(
+                f"<div style='font-size:12px; color:#8b96a8; margin-bottom:6px'>"
+                f"<code>{a['app_id']}</code> · {emoji} "
+                f"<b style='color:#e6edf3'>${a['amount']:,}</b> · "
+                f"<span style='color:#10b981'>{a['score']}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        st.divider()
+
     # Developer profile card with LinkedIn + GitHub
     st.markdown(
         f"""
@@ -271,7 +296,7 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("v2.1 · Educational use only")
+    st.caption("v2.2 · Educational use only")
 
 
 # ============================================================
@@ -437,6 +462,39 @@ def compliance_checks(loan_amnt, cred_hist_length, employment_length, person_age
         ("Adverse History",    "PASS" if default_on_file == "N" else "FLAG",
          "Clean record" if default_on_file == "N" else "Prior default on file"),
     ]
+
+
+# --- Basel III credit-risk metric -----------------------------
+# LGD = Loss Given Default — fraction the bank actually loses if the loan defaults
+# For UNSECURED personal loans the industry-standard assumption is ~60%
+# (recoveries via collections / write-off settlements typically average 40%).
+LGD_UNSECURED = 0.60
+
+
+def expected_loss(default_prob, exposure):
+    """
+    Basel III Expected Loss formula:    EL = PD × LGD × EAD
+      PD  = probability of default (our model output)
+      LGD = loss given default (assumed 60% for unsecured personal loans)
+      EAD = exposure at default (we use the full loan principal)
+    Returns dollar value of expected loss.
+    """
+    return default_prob * LGD_UNSECURED * exposure
+
+
+def adverse_action_reasons(shap_values, feature_cols, nice_names_map, top_n=3):
+    """
+    Generate the top N adverse action reasons, sorted by SHAP impact
+    (only positive contributions, since those PUSHED toward default).
+    Format mirrors what US ECOA / Fair Lending notices require.
+    """
+    pairs = [
+        (nice_names_map.get(c, c), v)
+        for c, v in zip(feature_cols, shap_values)
+        if v > 0          # only features pushing toward default
+    ]
+    pairs.sort(key=lambda x: -x[1])
+    return [p[0] for p in pairs[:top_n]]
 
 
 def amortization_schedule(principal, annual_rate_pct, months, n=6):
@@ -663,6 +721,13 @@ with tab_predict:
             person_home_ownership = st.selectbox(
                 "Home Ownership", options=encoder_cats["person_home_ownership"]
             )
+            # Multi-debt DSR — most banks include ALL monthly debt obligations,
+            # not just this loan, when computing affordability.
+            existing_debts = st.number_input(
+                "Existing Monthly Debts ($)",
+                min_value=0, max_value=20_000, value=0, step=50,
+                help="Credit cards · car loan · mortgage · other monthly payments",
+            )
 
         with c2:
             st.markdown("**📜 Credit History**")
@@ -736,7 +801,12 @@ with tab_predict:
         mp                = monthly_payment(loan_amnt, loan_int_rate, loan_term_months)
         total_paid        = mp * loan_term_months
         total_interest    = total_paid - loan_amnt
-        dsr               = dsr_ratio(mp, person_income)
+        # DSR uses the new loan payment PLUS any existing monthly debts.
+        # This is how Maybank/BCA actually compute it — total monthly debt servicing.
+        dsr_this_loan_only = dsr_ratio(mp, person_income)
+        dsr               = dsr_ratio(mp + existing_debts, person_income)
+        # Expected Loss (Basel III) — what the bank should provision for
+        e_loss            = expected_loss(default_prob, loan_amnt)
         dsr_lbl, dsr_col  = dsr_tier(dsr)
         max_loan          = max_eligible_loan(person_income, loan_int_rate, loan_term_months)
         auth, auth_col    = approval_authority(loan_amnt, default_prob)
@@ -798,8 +868,12 @@ with tab_predict:
                 unsafe_allow_html=True,
             )
         with k2:
+            # If existing debts exist, show both the combined DSR (headline)
+            # and a "this-loan-only" sub-delta so the banker can see the gap.
+            dsr_delta = (f"{dsr_lbl} · this loan only {dsr_this_loan_only:.1%}"
+                         if existing_debts > 0 else dsr_lbl)
             st.metric("Debt Service Ratio (DSR)", f"{dsr:.1%}",
-                      delta=dsr_lbl, delta_color="off")
+                      delta=dsr_delta, delta_color="off")
         with k3:
             st.metric("Max Eligible Amount", f"${max_loan:,.0f}",
                       delta=f"vs requested ${loan_amnt:,.0f}", delta_color="off")
@@ -836,7 +910,7 @@ with tab_predict:
             st.markdown(render_compliance_pills(checks), unsafe_allow_html=True)
 
         # ============================================================
-        # ❻  LOAN FINANCIALS
+        # ❻  LOAN FINANCIALS  +  BASEL III EXPECTED LOSS
         # ============================================================
         with st.container(border=True):
             st.markdown("#### 💰  Loan Financial Summary")
@@ -851,6 +925,18 @@ with tab_predict:
             f6.metric("Term",            f"{loan_term_months} mo")
             f7.metric("Annual Income",   f"${person_income:,}")
             f8.metric("Loan / Income",   f"{loan_percent_income:.1%}")
+
+            # Basel III credit-risk metrics — what real banks provision for
+            st.markdown("##### 🛡️ Basel III Credit-Risk Metrics")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("PD (Prob of Default)", f"{default_prob:.2%}")
+            b2.metric("LGD (Loss Given Default)", f"{LGD_UNSECURED:.0%}",
+                      delta="Unsecured assumption", delta_color="off")
+            b3.metric("EAD (Exposure at Default)", f"${loan_amnt:,.0f}")
+            b4.metric("Expected Loss", f"${e_loss:,.0f}",
+                      delta=f"{(e_loss / loan_amnt):.1%} of principal",
+                      delta_color="off",
+                      help="EL = PD × LGD × EAD — the bank's provision for this loan")
 
         # ============================================================
         # ❼  REPAYMENT SCHEDULE PREVIEW
@@ -931,7 +1017,52 @@ with tab_predict:
             plt.close(fig)
 
         # ============================================================
-        # ⓫  DOWNLOAD REPORT
+        # ⓫  ADVERSE ACTION NOTICE  (only shown on DECLINE)
+        # ============================================================
+        # When a US lender declines a loan, ECOA / Regulation B legally
+        # require them to issue an Adverse Action Notice listing the
+        # principal reasons. Many other jurisdictions (UK, EU, MY, SG)
+        # have similar customer-protection rules. We use the SHAP values
+        # to surface the top-3 most-influential adverse factors.
+        aan_reasons = []
+        if "DECLINE" in verdict:
+            aan_reasons = adverse_action_reasons(
+                contributions, feature_cols, nice_names, top_n=3,
+            )
+            with st.container(border=True):
+                st.markdown("#### ⚖️  Adverse Action Notice")
+                st.markdown(
+                    f"""
+                    <div style="background: rgba(239,68,68,0.08);
+                                border-left: 4px solid #ef4444;
+                                padding: 16px 20px; border-radius: 8px;
+                                color: #e6edf3; font-size: 14px; line-height: 1.7">
+                    <b>Application {app_id} — Notice of Decision</b><br>
+                    <i>Generated {timestamp}</i><br><br>
+                    We regret to inform you that, after careful review, your loan
+                    application has been <b>declined</b>. Under fair-lending regulations,
+                    we are required to share the principal reason(s):
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.markdown("**Principal reasons for adverse action:**")
+                for i, r in enumerate(aan_reasons, start=1):
+                    st.markdown(f"{i}. **{r}** — exceeds underwriting thresholds")
+                if not aan_reasons:
+                    st.markdown("- Overall credit risk score exceeded acceptable threshold")
+
+                st.markdown(
+                    """
+                    ---
+                    You have the right to obtain a free copy of your credit report
+                    if the decision was based in part on credit-bureau information.
+                    You may also dispute any inaccuracies in your file.
+                    """
+                )
+
+        # ============================================================
+        # ⓬  DOWNLOAD REPORT
         # ============================================================
         report = raw.T.reset_index()
         report.columns = ["Field", "Value"]
@@ -944,17 +1075,21 @@ with tab_predict:
                 "application_id", "timestamp", "decision",
                 "default_probability", "creditscope_score", "credit_tier",
                 "monthly_payment", "total_interest", "total_cost",
-                "dsr_ratio", "max_eligible_loan",
-                "approval_authority",
+                "dsr_ratio", "dsr_this_loan_only", "existing_monthly_debts",
+                "expected_loss", "lgd_assumption", "ead",
+                "max_eligible_loan", "approval_authority",
                 "suggested_rate", "suggested_amount",
+                "adverse_action_reasons",
             ],
             "Value": [
                 app_id, timestamp, verdict.strip(),
                 round(default_prob, 4), cs_score, cs_label,
                 round(mp, 2), round(total_interest, 2), round(total_paid, 2),
-                round(dsr, 4), round(max_loan, 2),
-                auth,
+                round(dsr, 4), round(dsr_this_loan_only, 4), existing_debts,
+                round(e_loss, 2), LGD_UNSECURED, loan_amnt,
+                round(max_loan, 2), auth,
                 round(new_rate, 2), round(new_amount, 2),
+                "; ".join(aan_reasons) if aan_reasons else "n/a",
             ],
         })
         full_report = pd.concat([summary_df, report, contribs_df], ignore_index=True)
@@ -967,6 +1102,22 @@ with tab_predict:
             mime="text/csv",
             use_container_width=True,
         )
+
+        # ============================================================
+        # ⓭  SAVE TO SESSION HISTORY  (keeps last 10 in browser memory)
+        # ============================================================
+        # We only append if this is a fresh app_id (avoids re-adding on rerun).
+        existing_ids = {a["app_id"] for a in st.session_state.app_history}
+        if app_id not in existing_ids:
+            st.session_state.app_history.insert(0, {
+                "app_id":   app_id,
+                "amount":   loan_amnt,
+                "tier":     risk_label(default_prob)[1],
+                "score":    cs_score,
+                "decision": verdict.strip(),
+                "time":     timestamp,
+            })
+            st.session_state.app_history = st.session_state.app_history[:10]
 
 
 # =============================================================
